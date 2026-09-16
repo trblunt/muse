@@ -8,6 +8,7 @@ import KeyValueCacheProvider from './key-value-cache.js';
 import {ONE_HOUR_IN_SECONDS, ONE_MINUTE_IN_SECONDS} from '../utils/constants.js';
 import {parseTime} from '../utils/time.js';
 import getYouTubeID from 'get-youtube-id';
+import {buildAudioFallbackQuery, rankAudioFallbackCandidates} from '../utils/youtube-audio-fallback.js';
 
 interface VideoDetailsResponse {
   id: string;

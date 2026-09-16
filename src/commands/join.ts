@@ -1,4 +1,4 @@
-import {ChatInputCommandInteraction, GuildMember, MessageFlags} from 'discord.js';
+import {ChatInputCommandInteraction, GuildMember} from 'discord.js';
 import {SlashCommandBuilder} from '@discordjs/builders';
 import {TYPES} from '../types.js';
 import {inject, injectable} from 'inversify';
@@ -22,7 +22,7 @@ export default class implements Command {
   }
 
   public async execute(interaction: ChatInputCommandInteraction) {
-    await interaction.deferReply({flags: MessageFlags.Ephemeral});
+    await interaction.deferReply({ephemeral: true});
 
     const player = this.playerManager.get(interaction.guild!.id);
     const [targetVoiceChannel] = getMemberVoiceChannel(interaction.member as GuildMember) ?? [];

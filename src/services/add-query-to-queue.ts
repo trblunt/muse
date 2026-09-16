@@ -1,5 +1,5 @@
 /* eslint-disable complexity */
-import {ChatInputCommandInteraction, GuildMember, MessageFlags, Snowflake, VoiceChannel} from 'discord.js';
+import {ChatInputCommandInteraction, GuildMember, Snowflake, VoiceChannel} from 'discord.js';
 import {inject, injectable} from 'inversify';
 import shuffle from 'array-shuffle';
 import {TYPES} from '../types.js';
@@ -68,7 +68,7 @@ export default class AddQueryToQueue {
 
     const {playlistLimit, queueAddResponseEphemeral} = settings;
 
-    await interaction.deferReply(queueAddResponseEphemeral ? {flags: MessageFlags.Ephemeral} : {});
+    await interaction.deferReply({ephemeral: queueAddResponseEphemeral});
 
     let [newSongs, extraMsg] = await this.getSongs.getSongs(query, playlistLimit, shouldSplitChapters);
 

@@ -27,7 +27,9 @@ const CONFIG_MAP = {
   BOT_ACTIVITY_URL: process.env.BOT_ACTIVITY_URL ?? '',
   BOT_ACTIVITY: process.env.BOT_ACTIVITY ?? 'music',
   ENABLE_SPONSORBLOCK: process.env.ENABLE_SPONSORBLOCK === 'true',
-  SPONSORBLOCK_TIMEOUT: Number(process.env.SPONSORBLOCK_TIMEOUT ?? 5),
+  SPONSORBLOCK_TIMEOUT: parseInt(process.env.SPONSORBLOCK_TIMEOUT ?? '5', 10),
+  YT_DLP_PATH: firstNonEmpty(process.env.YT_DLP_PATH, process.env.MUSE_BUNDLED_YT_DLP_PATH) ?? 'yt-dlp',
+  YT_DLP_AUTO_UPDATE: process.env.YT_DLP_AUTO_UPDATE === 'true',
   VOICE_COMMANDS_ENABLED: process.env.VOICE_COMMANDS_ENABLED === 'true',
   VOICE_COMMANDS_ENABLED_AT_STARTUP: process.env.VOICE_COMMANDS_ENABLED_AT_STARTUP !== 'false',
   VOICE_COMMANDS_AUTOSTART_SIDECAR: process.env.VOICE_COMMANDS_AUTOSTART_SIDECAR !== 'false',
@@ -64,6 +66,8 @@ export default class Config {
   readonly BOT_ACTIVITY!: string;
   readonly ENABLE_SPONSORBLOCK!: boolean;
   readonly SPONSORBLOCK_TIMEOUT!: number;
+  readonly YT_DLP_PATH!: string;
+  readonly YT_DLP_AUTO_UPDATE!: boolean;
   readonly VOICE_COMMANDS_ENABLED!: boolean;
   readonly VOICE_COMMANDS_ENABLED_AT_STARTUP!: boolean;
   readonly VOICE_COMMANDS_AUTOSTART_SIDECAR!: boolean;

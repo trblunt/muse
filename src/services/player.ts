@@ -114,6 +114,7 @@ export default class {
 
   private positionInSeconds = 0;
   private readonly fileCache: FileCacheProvider;
+  private readonly ageRestrictedFallbackResolver?: AgeRestrictedFallbackResolver;
   private readonly voiceCommandBridge?: VoiceCommandBridge;
   private disconnectTimer: NodeJS.Timeout | null = null;
   private lastConnectStartedAt = 0;
@@ -123,10 +124,21 @@ export default class {
   private voiceActivitySessionGeneration = 0;
   private hasRegisteredVoiceActivityListener = false;
 
-  constructor(fileCache: FileCacheProvider, guildId: string, voiceCommandBridge?: VoiceCommandBridge) {
+  constructor(
+    fileCache: FileCacheProvider,
+    guildId: string,
+    ageRestrictedFallbackResolver?: AgeRestrictedFallbackResolver,
+    voiceCommandBridge?: VoiceCommandBridge,
+  ) {
     this.fileCache = fileCache;
     this.guildId = guildId;
+    this.ageRestrictedFallbackResolver = ageRestrictedFallbackResolver;
     this.voiceCommandBridge = voiceCommandBridge;
+    this.playbackAttempts = new PlaybackAttemptTracker(() => ({
+      currentSong: this.getCurrent(),
+      queueEntryVersion: this.getCurrentQueueEntryId(),
+      currentConnection: this.voiceConnection,
+    }));
   }
 
   private logVoice(message: string): void {
@@ -304,27 +316,18 @@ export default class {
     let destinationPlayback: PlayerPlaybackAttemptContext | null = null;
 
     try {
-      if (this.getCurrent() && this.status !== STATUS.PAUSED) {
-        await this.play();
-      } else {
-        this.status = STATUS.IDLE;
-        this.audioPlayer?.stop(true);
-
-        const settings = await getGuildSettings(this.guildId);
-        const {secondsToWaitAfterQueueEmpties, voiceCommandsEnabled} = settings;
-        if (this.shouldStayConnectedForVoiceCommands(voiceCommandsEnabled)) {
-          this.logVoice(`keeping voice connection alive for wake word while idle in guild=${this.guildId}`);
-          return;
-        }
-
-        if (secondsToWaitAfterQueueEmpties !== 0) {
-          this.disconnectTimer = setTimeout(() => {
-            // Make sure we are not accidentally playing
-            // when disconnecting
-            if (this.status === STATUS.IDLE) {
-              this.disconnect();
-            }
-          }, secondsToWaitAfterQueueEmpties * 1000);
+      if (!destinationSong) {
+        await this.finishQueue();
+      } else if (this.status !== STATUS.PAUSED) {
+        const playPromise = this.play();
+        const destinationConnection = this.voiceConnection;
+        if (destinationConnection && destinationSong && destinationQueueEntryVersion !== null) {
+          destinationPlayback = this.playbackAttempts.capture(
+            this.playbackAttempts.latest(),
+            destinationSong,
+            destinationQueueEntryVersion,
+            destinationConnection,
+          );
         }
 
         await playPromise;
@@ -969,6 +972,76 @@ export default class {
     await entersState(voiceConnection, VoiceConnectionStatus.Ready, 60_000);
   }
 
+  private async advancePastUnplayableTrack(): Promise<void> {
+    this.manualForward(1);
+
+    if (!this.getCurrent()) {
+      await this.finishQueue();
+      return;
+    }
+
+    await this.play();
+  }
+
+  private async tryAgeRestrictedAudioFallback(playback: PlayerPlaybackAttemptContext): Promise<boolean> {
+    const {song, queueEntryVersion, attempt, connection} = playback;
+    if (!this.ageRestrictedFallbackResolver || song.source !== MediaSource.Youtube) {
+      return false;
+    }
+
+    if (!this.playbackAttempts.owns(playback)) {
+      return true;
+    }
+
+    let fallback: SongMetadata | null;
+    try {
+      fallback = await this.ageRestrictedFallbackResolver(song);
+    } catch {
+      if (!this.playbackAttempts.owns(playback)) {
+        return true;
+      }
+
+      console.warn(`Audio fallback search failed for age-restricted track in guild ${this.guildId}.`);
+      return false;
+    }
+
+    if (!this.playbackAttempts.owns(playback)) {
+      return true;
+    }
+
+    if (!fallback || fallback.source !== MediaSource.Youtube || fallback.url === song.url) {
+      return false;
+    }
+
+    const {queuePosition} = this;
+    const replacement: QueuedSong = {
+      ...fallback,
+      playlist: song.playlist,
+      addedInChannelId: song.addedInChannelId,
+      requestedBy: song.requestedBy,
+    };
+    this.queue[queuePosition] = replacement;
+    const replacementPlayback = this.playbackAttempts.capture(
+      attempt,
+      replacement,
+      queueEntryVersion,
+      connection,
+    );
+    console.warn(`Trying audio fallback for age-restricted YouTube track in guild ${this.guildId}: ${song.url} -> ${replacement.url}`);
+
+    try {
+      await this.playWithAttempt(attempt, false);
+      return true;
+    } catch (error: unknown) {
+      if (this.playbackAttempts.owns(replacementPlayback)
+        && this.queue[queuePosition] === replacement) {
+        this.queue[queuePosition] = song;
+      }
+
+      throw error;
+    }
+  }
+
   private async onAudioPlayerIdle(_oldState: AudioPlayerState, newState: AudioPlayerState): Promise<void> {
     // Automatically advance queued song at end
     if (this.loopCurrentSong && newState.status === AudioPlayerStatus.Idle && this.status === STATUS.PLAYING) {
@@ -1018,7 +1091,12 @@ export default class {
 
     const settings = await getGuildSettings(this.guildId);
 
-    const {secondsToWaitAfterQueueEmpties} = settings;
+    const {secondsToWaitAfterQueueEmpties, voiceCommandsEnabled} = settings;
+    if (this.shouldStayConnectedForVoiceCommands(voiceCommandsEnabled)) {
+      this.logVoice(`keeping voice connection alive for wake word while idle in guild=${this.guildId}`);
+      return;
+    }
+
     if (secondsToWaitAfterQueueEmpties !== 0) {
       this.disconnectTimer = setTimeout(() => {
         // Make sure we are not accidentally playing
