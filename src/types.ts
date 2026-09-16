@@ -12,6 +12,8 @@ export const TYPES = {
   Services: {
     AddQueryToQueue: Symbol('AddQueryToQueue'),
     GetSongs: Symbol('GetSongs'),
+    VoiceCommandBridge: Symbol('VoiceCommandBridge'),
+    VoiceCommandService: Symbol('VoiceCommandService'),
     YoutubeAPI: Symbol('YoutubeAPI'),
     SpotifyAPI: Symbol('SpotifyAPI'),
   },

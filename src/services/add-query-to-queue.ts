@@ -1,4 +1,5 @@
-import {ChatInputCommandInteraction, GuildMember} from 'discord.js';
+/* eslint-disable complexity */
+import {ChatInputCommandInteraction, GuildMember, MessageFlags, Snowflake, VoiceChannel} from 'discord.js';
 import {inject, injectable} from 'inversify';
 import shuffle from 'array-shuffle';
 import {TYPES} from '../types.js';
@@ -67,7 +68,7 @@ export default class AddQueryToQueue {
 
     const {playlistLimit, queueAddResponseEphemeral} = settings;
 
-    await interaction.deferReply({ephemeral: queueAddResponseEphemeral});
+    await interaction.deferReply(queueAddResponseEphemeral ? {flags: MessageFlags.Ephemeral} : {});
 
     let [newSongs, extraMsg] = await this.getSongs.getSongs(query, playlistLimit, shouldSplitChapters);
 
@@ -152,6 +153,49 @@ export default class AddQueryToQueue {
       await interaction.editReply(`u betcha, **${firstSong.title}** added to the${addToFrontOfQueue ? ' front of the' : ''} queue${didSkipCurrentTrack ? ' and current track skipped' : ''}${extraMsg}`);
     } else {
       await interaction.editReply(`u betcha, **${firstSong.title}** and ${newSongs.length - 1} other songs were added to the queue${didSkipCurrentTrack ? ' and current track skipped' : ''}${extraMsg}`);
+    }
+  }
+
+  public async addToQueueFromVoiceCommand({
+    guildId,
+    query,
+    requestedBy,
+    targetVoiceChannel,
+    addedInChannelId,
+  }: {
+    guildId: string;
+    query: string;
+    requestedBy: string;
+    targetVoiceChannel: VoiceChannel;
+    addedInChannelId: Snowflake;
+  }): Promise<void> {
+    const player = this.playerManager.get(guildId);
+    const wasPlayingSong = player.getCurrent() !== null;
+    const settings = await getGuildSettings(guildId);
+
+    let [newSongs] = await this.getSongs.getSongs(query, settings.playlistLimit, false);
+
+    if (newSongs.length === 0) {
+      throw new Error('no songs found');
+    }
+
+    if (this.config.ENABLE_SPONSORBLOCK) {
+      newSongs = await Promise.all(newSongs.map(this.skipNonMusicSegments.bind(this)));
+    }
+
+    newSongs.forEach(song => {
+      player.add({
+        ...song,
+        addedInChannelId,
+        requestedBy,
+      });
+    });
+
+    if (player.voiceConnection === null) {
+      await player.connect(targetVoiceChannel);
+      await player.play();
+    } else if (player.status === STATUS.IDLE || wasPlayingSong === false) {
+      await player.play();
     }
   }
 

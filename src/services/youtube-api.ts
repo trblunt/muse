@@ -55,13 +55,11 @@ interface PlaylistItem {
 }
 
 interface SearchResponse {
-  items: SearchItem[];
-}
-
-interface SearchItem {
-  id: {
-    videoId: string;
-  };
+  items: Array<{
+    id: {
+      videoId?: string;
+    };
+  }>;
 }
 
 @injectable()
@@ -84,48 +82,29 @@ export default class {
   }
 
   async search(query: string, shouldSplitChapters: boolean): Promise<SongMetadata[]> {
-    const ids = await this.searchVideoIDs(query);
+    const searchParams = {
+      searchParams: {
+        part: 'id',
+        q: query,
+        type: 'video',
+        maxResults: '1',
+      },
+    };
 
-    if (ids.length === 0) {
+    const {items} = await this.cache.wrap(
+      async () => this.got('search', searchParams).json() as Promise<SearchResponse>,
+      searchParams,
+      {
+        expiresIn: ONE_HOUR_IN_SECONDS,
+      },
+    );
+
+    const firstVideoId = items.at(0)?.id.videoId;
+    if (!firstVideoId) {
       return [];
     }
 
-    const videos = await this.getVideosByID(ids);
-    const firstVideo = ids
-      .map(id => videos.find(video => video.id === id))
-      .find(Boolean);
-
-    return firstVideo
-      ? this.getMetadataFromVideo({video: firstVideo, shouldSplitChapters})
-      : [];
-  }
-
-  async findAudioFallback(song: SongMetadata): Promise<SongMetadata | null> {
-    if (song.source !== MediaSource.Youtube || song.isLive) {
-      return null;
-    }
-
-    const query = buildAudioFallbackQuery(song);
-    if (!query) {
-      return null;
-    }
-
-    const ids = (await this.searchVideoIDs(query, {videoCategoryId: '10'}))
-      .filter(id => id !== song.url);
-    if (ids.length === 0) {
-      return null;
-    }
-
-    const videos = await this.getVideosByID(ids);
-    const candidates = ids
-      .map(id => videos.find(video => video.id === id))
-      .filter((video): video is VideoDetailsResponse => (
-        Boolean(video)
-        && video!.contentDetails.contentRating?.ytRating !== 'ytAgeRestricted'
-      ))
-      .flatMap(video => this.getMetadataFromVideo({video, shouldSplitChapters: false}));
-
-    return rankAudioFallbackCandidates(song, candidates).at(0) ?? null;
+    return this.getVideo(`https://www.youtube.com/watch?v=${firstVideoId}`, shouldSplitChapters);
   }
 
   async getVideo(url: string, shouldSplitChapters: boolean): Promise<SongMetadata[]> {

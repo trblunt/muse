@@ -13,6 +13,8 @@ import AddQueryToQueue from './services/add-query-to-queue.js';
 import GetSongs from './services/get-songs.js';
 import YoutubeAPI from './services/youtube-api.js';
 import SpotifyAPI from './services/spotify-api.js';
+import VoiceCommandBridge from './services/voice-command-bridge.js';
+import VoiceCommandService from './services/voice-command-service.js';
 
 // Commands
 import Command from './commands/index.js';
@@ -21,6 +23,7 @@ import Config from './commands/config.js';
 import Disconnect from './commands/disconnect.js';
 import Favorites from './commands/favorites.js';
 import ForwardSeek from './commands/fseek.js';
+import Join from './commands/join.js';
 import LoopQueue from './commands/loop-queue.js';
 import Loop from './commands/loop.js';
 import Move from './commands/move.js';
@@ -38,6 +41,7 @@ import Skip from './commands/skip.js';
 import Stop from './commands/stop.js';
 import Unskip from './commands/unskip.js';
 import Volume from './commands/volume.js';
+import VoiceCommands from './commands/voice-commands.js';
 import ThirdParty from './services/third-party.js';
 import FileCacheProvider from './services/file-cache.js';
 import KeyValueCacheProvider from './services/key-value-cache.js';
@@ -63,6 +67,8 @@ container.bind(TYPES.Config).toConstantValue(new ConfigProvider());
 // Services
 container.bind<GetSongs>(TYPES.Services.GetSongs).to(GetSongs).inSingletonScope();
 container.bind<AddQueryToQueue>(TYPES.Services.AddQueryToQueue).to(AddQueryToQueue).inSingletonScope();
+container.bind<VoiceCommandService>(TYPES.Services.VoiceCommandService).to(VoiceCommandService).inSingletonScope();
+container.bind<VoiceCommandBridge>(TYPES.Services.VoiceCommandBridge).to(VoiceCommandBridge).inSingletonScope();
 container.bind<YoutubeAPI>(TYPES.Services.YoutubeAPI).to(YoutubeAPI).inSingletonScope();
 
 // Only instanciate spotify dependencies if the Spotify client ID and secret are set
@@ -79,6 +85,7 @@ if (config.SPOTIFY_CLIENT_ID !== '' && config.SPOTIFY_CLIENT_SECRET !== '') {
   Disconnect,
   Favorites,
   ForwardSeek,
+  Join,
   LoopQueue,
   Loop,
   Move,
@@ -96,6 +103,7 @@ if (config.SPOTIFY_CLIENT_ID !== '' && config.SPOTIFY_CLIENT_SECRET !== '') {
   Stop,
   Unskip,
   Volume,
+  VoiceCommands,
 ].forEach(command => {
   container.bind<Command>(TYPES.Command).to(command).inSingletonScope();
 });

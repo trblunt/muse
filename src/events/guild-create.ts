@@ -9,12 +9,15 @@ import {Setting} from '@prisma/client';
 import registerCommandsOnGuild from '../utils/register-commands-on-guild.js';
 
 export async function createGuildSettings(guildId: string): Promise<Setting> {
+  const config = container.get<Config>(TYPES.Config);
+
   return prisma.setting.upsert({
     where: {
       guildId,
     },
     create: {
       guildId,
+      voiceCommandsEnabled: config.VOICE_COMMANDS_ENABLED_AT_STARTUP,
     },
     update: {},
   });

@@ -1,4 +1,4 @@
-import {Client, Collection, User} from 'discord.js';
+import {Client, Collection, MessageFlags, User} from 'discord.js';
 import {inject, injectable} from 'inversify';
 import ora from 'ora';
 import {TYPES} from './types.js';
@@ -89,7 +89,7 @@ export default class {
 
           const requiresVC = command.requiresVC instanceof Function ? command.requiresVC(interaction) : command.requiresVC;
           if (requiresVC && interaction.member && !isUserInVoice(interaction.guild, interaction.member.user as User)) {
-            await interaction.reply({content: errorMsg('gotta be in a voice channel'), ephemeral: true});
+            await interaction.reply({content: errorMsg('gotta be in a voice channel'), flags: MessageFlags.Ephemeral});
             return;
           }
 
@@ -133,7 +133,7 @@ export default class {
           if ((interaction.isCommand() || interaction.isButton()) && (interaction.replied || interaction.deferred)) {
             await interaction.editReply(errorMsg(userSafeError));
           } else if (interaction.isCommand() || interaction.isButton()) {
-            await interaction.reply({content: errorMsg(userSafeError), ephemeral: true});
+            await interaction.reply({content: errorMsg(error as Error), flags: MessageFlags.Ephemeral});
           }
         } catch {}
       }
@@ -141,7 +141,7 @@ export default class {
 
     const spinner = ora('📡 connecting to Discord...').start();
 
-    this.client.once('ready', async () => {
+    this.client.once('clientReady', async () => {
       debug(generateDependencyReport());
 
       // Update commands

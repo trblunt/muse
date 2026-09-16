@@ -1,12 +1,18 @@
 import {SlashCommandBuilder} from '@discordjs/builders';
 import {ChatInputCommandInteraction, EmbedBuilder, PermissionFlagsBits} from 'discord.js';
-import {injectable} from 'inversify';
+import {inject, injectable} from 'inversify';
 import {prisma} from '../utils/db.js';
 import Command from './index.js';
 import {getGuildSettings} from '../utils/get-guild-settings.js';
+import {TYPES} from '../types.js';
+import PlayerManager from '../managers/player.js';
+import Config from '../services/config.js';
 
 @injectable()
 export default class implements Command {
+  private readonly playerManager: PlayerManager;
+  private readonly config: Config;
+
   public readonly slashCommand = new SlashCommandBuilder()
     .setName('config')
     .setDescription('configure bot settings')
@@ -34,6 +40,13 @@ export default class implements Command {
         .setDescription('whether to leave when everyone else leaves')
         .setRequired(true)))
     .addSubcommand(subcommand => subcommand
+      .setName('set-voice-commands-enabled')
+      .setDescription('set whether wake-word voice commands stay enabled for this guild')
+      .addBooleanOption(option => option
+        .setName('value')
+        .setDescription('whether voice commands should stay enabled')
+        .setRequired(true)))
+    .addSubcommand(subcommand => subcommand
       .setName('set-queue-add-response-hidden')
       .setDescription('set whether bot responses to queue additions are only displayed to the requester')
       .addBooleanOption(option => option
@@ -52,7 +65,7 @@ export default class implements Command {
       .setDescription('set the target volume when people speak')
       .addIntegerOption(option => option
         .setName('volume')
-        .setDescription('volume percentage (0 is muted, 100 is max & default)')
+        .setDescription('volume percentage (0 is muted, 100 is max and default)')
         .setMinValue(0)
         .setMaxValue(100)
         .setRequired(true)))
@@ -68,7 +81,7 @@ export default class implements Command {
       .setDescription('set default volume used when entering the voice channel')
       .addIntegerOption(option => option
         .setName('level')
-        .setDescription('volume percentage (0 is muted, 100 is max & default)')
+        .setDescription('volume percentage (0 is muted, 100 is max and default)')
         .setMinValue(0)
         .setMaxValue(100)
         .setRequired(true)))
@@ -85,13 +98,20 @@ export default class implements Command {
       .setName('get')
       .setDescription('show all settings'));
 
+  constructor(
+    @inject(TYPES.Managers.Player) playerManager: PlayerManager,
+    @inject(TYPES.Config) config: Config,
+  ) {
+    this.playerManager = playerManager;
+    this.config = config;
+  }
+
   async execute(interaction: ChatInputCommandInteraction) {
-    // Ensure guild settings exist before trying to update
     await getGuildSettings(interaction.guild!.id);
 
     switch (interaction.options.getSubcommand()) {
       case 'set-playlist-limit': {
-        const limit: number = interaction.options.getInteger('limit')!;
+        const limit = interaction.options.getInteger('limit')!;
 
         if (limit < 1) {
           throw new Error('invalid limit');
@@ -106,7 +126,7 @@ export default class implements Command {
           },
         });
 
-        await interaction.reply('👍 limit updated');
+        await interaction.reply('ok, playlist limit updated');
 
         break;
       }
@@ -123,7 +143,7 @@ export default class implements Command {
           },
         });
 
-        await interaction.reply('👍 wait delay updated');
+        await interaction.reply('ok, wait delay updated');
 
         break;
       }
@@ -140,7 +160,29 @@ export default class implements Command {
           },
         });
 
-        await interaction.reply('👍 leave setting updated');
+        await interaction.reply('ok, leave-if-no-listeners updated');
+
+        break;
+      }
+
+      case 'set-voice-commands-enabled': {
+        const value = interaction.options.getBoolean('value')!;
+
+        await prisma.setting.update({
+          where: {
+            guildId: interaction.guild!.id,
+          },
+          data: {
+            voiceCommandsEnabled: value,
+          },
+        });
+
+        this.playerManager.get(interaction.guild!.id).refreshVoiceCommandListening(value);
+
+        const suffix = this.config.VOICE_COMMANDS_ENABLED
+          ? ''
+          : ' Global VOICE_COMMANDS_ENABLED is off, so this will only apply after that is enabled.';
+        await interaction.reply(`ok, voice commands ${value ? 'enabled' : 'disabled'} for this guild.${suffix}`);
 
         break;
       }
@@ -157,7 +199,7 @@ export default class implements Command {
           },
         });
 
-        await interaction.reply('👍 queue add notification setting updated');
+        await interaction.reply('ok, queue add notification setting updated');
 
         break;
       }
@@ -174,7 +216,7 @@ export default class implements Command {
           },
         });
 
-        await interaction.reply('👍 auto announce setting updated');
+        await interaction.reply('ok, auto announce setting updated');
 
         break;
       }
@@ -191,7 +233,7 @@ export default class implements Command {
           },
         });
 
-        await interaction.reply('👍 volume setting updated');
+        await interaction.reply('ok, volume setting updated');
 
         break;
       }
@@ -208,7 +250,7 @@ export default class implements Command {
           },
         });
 
-        await interaction.reply('👍 default queue page size updated');
+        await interaction.reply('ok, default queue page size updated');
 
         break;
       }
@@ -225,7 +267,7 @@ export default class implements Command {
           },
         });
 
-        await interaction.reply('👍 turn down volume setting updated');
+        await interaction.reply('ok, turn down volume setting updated');
 
         break;
       }
@@ -242,7 +284,7 @@ export default class implements Command {
           },
         });
 
-        await interaction.reply('👍 turn down volume target setting updated');
+        await interaction.reply('ok, turn down volume target setting updated');
 
         break;
       }
@@ -258,8 +300,9 @@ export default class implements Command {
             ? 'never leave'
             : `${config.secondsToWaitAfterQueueEmpties}s`,
           'Leave if there are no listeners': config.leaveIfNoListeners ? 'yes' : 'no',
+          'Voice commands enabled': config.voiceCommandsEnabled ? 'yes' : 'no',
           'Auto announce next song in queue': config.autoAnnounceNextSong ? 'yes' : 'no',
-          'Add to queue reponses show for requester only': config.queueAddResponseEphemeral ? 'yes' : 'no',
+          'Add to queue responses show for requester only': config.queueAddResponseEphemeral ? 'yes' : 'no',
           'Default Volume': config.defaultVolume,
           'Default queue page size': config.defaultQueuePageSize,
           'Reduce volume when people speak': config.turnDownVolumeWhenPeopleSpeak ? 'yes' : 'no',

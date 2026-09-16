@@ -35,6 +35,7 @@ import {getGuildSettings} from '../utils/get-guild-settings.js';
 import {buildPlayingMessageEmbed} from '../utils/build-embed.js';
 import {getSoundCloudMediaSource, getYouTubeMediaSource, YtDlpMediaUnavailableError} from '../utils/yt-dlp.js';
 import {Setting} from '@prisma/client';
+import VoiceCommandBridge from './voice-command-bridge.js';
 
 export {DEFAULT_VOLUME, MediaSource, STATUS};
 export type {AgeRestrictedFallbackResolver, PlayerEvents, QueuedPlaylist, QueuedSong, SongMetadata};
@@ -113,8 +114,19 @@ export default class {
 
   private positionInSeconds = 0;
   private readonly fileCache: FileCacheProvider;
-  private readonly ageRestrictedFallbackResolver?: AgeRestrictedFallbackResolver;
+  private readonly voiceCommandBridge?: VoiceCommandBridge;
   private disconnectTimer: NodeJS.Timeout | null = null;
+  private lastConnectStartedAt = 0;
+  private readonly networkingStateChangeHandler = (_oldNetworkState: unknown, newNetworkState: unknown) => {
+    if (!newNetworkState || typeof newNetworkState !== 'object') {
+      return;
+    }
+
+    /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call */
+    const newUdp = Reflect.get(newNetworkState, 'udp');
+    clearInterval(newUdp?.keepAliveInterval);
+    /* eslint-enable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call */
+  };
 
   private readonly channelToSpeakingUsers: Map<string, Set<string>> = new Map();
   private volumeBeforeVoiceActivity?: number;
@@ -122,21 +134,24 @@ export default class {
   private voiceActivitySessionGeneration = 0;
   private hasRegisteredVoiceActivityListener = false;
 
-  constructor(fileCache: FileCacheProvider, guildId: string, ageRestrictedFallbackResolver?: AgeRestrictedFallbackResolver) {
+  constructor(fileCache: FileCacheProvider, guildId: string, voiceCommandBridge?: VoiceCommandBridge) {
     this.fileCache = fileCache;
     this.guildId = guildId;
-    this.ageRestrictedFallbackResolver = ageRestrictedFallbackResolver;
-    this.playbackAttempts = new PlaybackAttemptTracker(() => ({
-      currentSong: this.getCurrent(),
-      queueEntryVersion: this.getCurrentQueueEntryId(),
-      currentConnection: this.voiceConnection,
-    }));
+    this.voiceCommandBridge = voiceCommandBridge;
+  }
+
+  private logVoice(message: string): void {
+    if (process.env.VOICE_COMMANDS_DEBUG !== 'true') {
+      return;
+    }
+
+    console.info(`[voice-debug] ${message}`);
   }
 
   async connect(channel: VoiceChannel): Promise<void> {
-    if (this.voiceConnection) {
-      this.disconnect();
-    }
+    this.lastConnectStartedAt = Date.now();
+    this.logVoice(`player.connect guild=${this.guildId} targetChannel=${channel.id} (${channel.name})`);
+    this.voiceCommandBridge?.detach(this.guildId);
 
     // Always get freshest default volume setting value
     const settings = await getGuildSettings(this.guildId);
@@ -147,15 +162,17 @@ export default class {
       channelId: channel.id,
       guildId: channel.guild.id,
       selfDeaf: false,
+      selfMute: true,
+      debug: process.env.VOICE_COMMANDS_DEBUG === 'true',
       adapterCreator: channel.guild.voiceAdapterCreator as DiscordGatewayAdapterCreator,
     });
 
-    this.voiceConnection = voiceConnection;
-    this.currentChannel = channel;
-    this.hasRegisteredVoiceActivityListener = false;
+    this.voiceConnection.on('debug', message => {
+      this.logVoice(`voiceConnection debug guild=${this.guildId} ${message}`);
+    });
 
-    voiceConnection.on('error', error => {
-      console.error(`Voice connection error for guild ${this.guildId}:`, error);
+    this.voiceConnection.on('error', error => {
+      this.logVoice(`voiceConnection error guild=${this.guildId} ${(error as Error).message}`);
     });
 
     const guildSettings = await getGuildSettings(this.guildId);
@@ -166,32 +183,34 @@ export default class {
         stateTransitions.shift();
       }
 
-      debug(`Voice connection state changed: ${oldState.status} -> ${newState.status}`);
+    // Workaround to disable keepAlive
+    this.voiceConnection.on('stateChange', (oldState, newState) => {
+      this.logVoice(`voiceConnection state guild=${this.guildId} ${oldState.status} -> ${newState.status}`);
+      /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call */
+      const oldNetworking = Reflect.get(oldState, 'networking');
+      const newNetworking = Reflect.get(newState, 'networking');
 
-      if (this.voiceConnection === voiceConnection
-        && newState.status === VoiceConnectionStatus.Ready
-        && !this.hasRegisteredVoiceActivityListener) {
-        this.registerVoiceActivityListener(guildSettings);
-        this.hasRegisteredVoiceActivityListener = true;
-      }
+      oldNetworking?.off('stateChange', this.networkingStateChangeHandler);
+      newNetworking?.off('stateChange', this.networkingStateChangeHandler);
+      newNetworking?.on('stateChange', this.networkingStateChangeHandler);
+      /* eslint-enable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call */
+
+      this.currentChannel = channel;
     });
 
-    voiceConnection.on(
-      VoiceConnectionStatus.Disconnected,
-      this.onVoiceConnectionDisconnect.bind(this, voiceConnection),
-    );
-
     try {
-      await this.waitForVoiceConnectionReady(voiceConnection);
-    } catch {
-      const {status} = voiceConnection.state;
-      destroyVoiceConnection(voiceConnection);
-
-      if (this.voiceConnection === voiceConnection) {
-        this.voiceConnection = null;
-      }
-
-      throw new Error(`Failed to connect to the voice channel (last state: ${status}, rejoin attempts: ${voiceConnection.rejoinAttempts}, recent states: ${stateTransitions.join(' -> ')}).`);
+      await entersState(this.voiceConnection, VoiceConnectionStatus.Ready, 20_000);
+      this.currentChannel = channel;
+      this.logVoice(`voiceConnection ready guild=${this.guildId} channel=${channel.id} (${channel.name})`);
+      this.registerVoiceActivityListener(guildSettings);
+      this.refreshVoiceCommandListening(guildSettings.voiceCommandsEnabled);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logVoice(`voiceConnection failed to become ready guild=${this.guildId} channel=${channel.id} (${channel.name}) error=${message}`);
+      this.voiceConnection.destroy();
+      this.voiceConnection = null;
+      this.currentChannel = undefined;
+      throw new Error('voice connection did not become ready');
     }
   }
 
@@ -200,23 +219,44 @@ export default class {
     this.voiceActivitySessionGeneration++;
 
     if (this.voiceConnection) {
+      this.logVoice(`player.disconnect guild=${this.guildId} channel=${this.currentChannel?.id ?? 'unknown'}`);
       if (this.status === STATUS.PLAYING) {
         this.pause();
       }
 
       this.loopCurrentSong = false;
-      destroyVoiceConnection(this.voiceConnection);
-      this.stopAudioPlayer(true);
+      this.voiceConnection.destroy();
+      this.audioPlayer?.stop(true);
+      this.voiceCommandBridge?.detach(this.guildId);
 
       this.voiceConnection = null;
       this.audioPlayer = null;
       this.audioResource = null;
       this.currentChannel = undefined;
-      this.channelToSpeakingUsers.clear();
-      this.volumeBeforeVoiceActivity = undefined;
-      this.voiceActivityVolumeTarget = undefined;
-      this.hasRegisteredVoiceActivityListener = false;
     }
+  }
+
+  disconnectForShutdown(): void {
+    if (!this.voiceConnection) {
+      return;
+    }
+
+    this.logVoice(`player.disconnectForShutdown guild=${this.guildId} channel=${this.currentChannel?.id ?? 'unknown'}`);
+    if (this.status === STATUS.PLAYING) {
+      this.pause();
+    }
+
+    this.loopCurrentSong = false;
+    this.voiceCommandBridge?.detach(this.guildId);
+    this.audioPlayer?.stop(true);
+
+    const voiceConnection = this.voiceConnection;
+    voiceConnection.destroy();
+
+    this.voiceConnection = null;
+    this.audioPlayer = null;
+    this.audioResource = null;
+    this.currentChannel = undefined;
   }
 
   async seek(positionSeconds: number): Promise<void> {
@@ -262,18 +302,27 @@ export default class {
     let destinationPlayback: PlayerPlaybackAttemptContext | null = null;
 
     try {
-      if (!destinationSong) {
-        await this.finishQueue();
-      } else if (this.status !== STATUS.PAUSED) {
-        const playPromise = this.play();
-        const destinationConnection = this.voiceConnection;
-        if (destinationConnection && destinationSong && destinationQueueEntryVersion !== null) {
-          destinationPlayback = this.playbackAttempts.capture(
-            this.playbackAttempts.latest(),
-            destinationSong,
-            destinationQueueEntryVersion,
-            destinationConnection,
-          );
+      if (this.getCurrent() && this.status !== STATUS.PAUSED) {
+        await this.play();
+      } else {
+        this.status = STATUS.IDLE;
+        this.audioPlayer?.stop(true);
+
+        const settings = await getGuildSettings(this.guildId);
+        const {secondsToWaitAfterQueueEmpties, voiceCommandsEnabled} = settings;
+        if (this.shouldStayConnectedForVoiceCommands(voiceCommandsEnabled)) {
+          this.logVoice(`keeping voice connection alive for wake word while idle in guild=${this.guildId}`);
+          return;
+        }
+
+        if (secondsToWaitAfterQueueEmpties !== 0) {
+          this.disconnectTimer = setTimeout(() => {
+            // Make sure we are not accidentally playing
+            // when disconnecting
+            if (this.status === STATUS.IDLE) {
+              this.disconnect();
+            }
+          }, secondsToWaitAfterQueueEmpties * 1000);
         }
 
         await playPromise;
@@ -742,6 +791,33 @@ export default class {
     throw error;
   }
 
+  getCurrentVoiceChannel(): VoiceChannel | undefined {
+    return this.currentChannel;
+  }
+
+  shouldStayConnectedForVoiceCommands(voiceCommandsEnabled: boolean): boolean {
+    return voiceCommandsEnabled && (this.voiceCommandBridge?.globallyEnabled ?? false);
+  }
+
+  refreshVoiceCommandListening(voiceCommandsEnabled: boolean): void {
+    if (!this.voiceConnection || !this.currentChannel) {
+      return;
+    }
+
+    if (this.shouldStayConnectedForVoiceCommands(voiceCommandsEnabled)) {
+      this.logVoice(`voice commands enabled for guild=${this.guildId}; attaching receiver`);
+      this.voiceCommandBridge?.attach(this.guildId, this.voiceConnection, this.currentChannel);
+      return;
+    }
+
+    this.logVoice(`voice commands disabled for guild=${this.guildId}; detaching receiver`);
+    this.voiceCommandBridge?.detach(this.guildId);
+  }
+
+  isInConnectGracePeriod(gracePeriodMs = 15_000): boolean {
+    return this.lastConnectStartedAt !== 0 && (Date.now() - this.lastConnectStartedAt) < gracePeriodMs;
+  }
+
   private getHashForCache(url: string): string {
     return hasha(url);
   }
@@ -864,101 +940,9 @@ export default class {
     }
   }
 
-  private async onVoiceConnectionDisconnect(voiceConnection: VoiceConnection): Promise<void> {
-    await recoverVoiceConnection(voiceConnection, {
-      isCurrent: candidate => this.voiceConnection === candidate,
-      dispose: candidate => {
-        if (this.voiceConnection === candidate) {
-          this.disconnect();
-        } else {
-          destroyVoiceConnection(candidate);
-        }
-      },
-    });
-  }
-
-  private async ensureVoiceConnectionReady(): Promise<VoiceConnection> {
-    if (this.voiceConnection === null) {
-      throw new Error('Not connected to a voice channel.');
-    }
-
-    await this.waitForVoiceConnectionReady(this.voiceConnection);
-
-    return this.voiceConnection;
-  }
-
-  private async waitForVoiceConnectionReady(voiceConnection: VoiceConnection): Promise<void> {
-    await entersState(voiceConnection, VoiceConnectionStatus.Ready, 60_000);
-  }
-
-  private async advancePastUnplayableTrack(): Promise<void> {
-    this.manualForward(1);
-
-    if (!this.getCurrent()) {
-      await this.finishQueue();
-      return;
-    }
-
-    await this.play();
-  }
-
-  private async tryAgeRestrictedAudioFallback(playback: PlayerPlaybackAttemptContext): Promise<boolean> {
-    const {song, queueEntryVersion, attempt, connection} = playback;
-    if (!this.ageRestrictedFallbackResolver || song.source !== MediaSource.Youtube) {
-      return false;
-    }
-
-    if (!this.playbackAttempts.owns(playback)) {
-      return true;
-    }
-
-    let fallback: SongMetadata | null;
-    try {
-      fallback = await this.ageRestrictedFallbackResolver(song);
-    } catch {
-      if (!this.playbackAttempts.owns(playback)) {
-        return true;
-      }
-
-      console.warn(`Audio fallback search failed for age-restricted track in guild ${this.guildId}.`);
-      return false;
-    }
-
-    if (!this.playbackAttempts.owns(playback)) {
-      return true;
-    }
-
-    if (!fallback || fallback.source !== MediaSource.Youtube || fallback.url === song.url) {
-      return false;
-    }
-
-    const {queuePosition} = this;
-    const replacement: QueuedSong = {
-      ...fallback,
-      playlist: song.playlist,
-      addedInChannelId: song.addedInChannelId,
-      requestedBy: song.requestedBy,
-    };
-    this.queue[queuePosition] = replacement;
-    const replacementPlayback = this.playbackAttempts.capture(
-      attempt,
-      replacement,
-      queueEntryVersion,
-      connection,
-    );
-    console.warn(`Trying audio fallback for age-restricted YouTube track in guild ${this.guildId}: ${song.url} -> ${replacement.url}`);
-
-    try {
-      await this.playWithAttempt(attempt, false);
-      return true;
-    } catch (error: unknown) {
-      if (this.playbackAttempts.owns(replacementPlayback)
-        && this.queue[queuePosition] === replacement) {
-        this.queue[queuePosition] = song;
-      }
-
-      throw error;
-    }
+  private onVoiceConnectionDisconnect(): void {
+    this.logVoice(`voiceConnection disconnected event guild=${this.guildId}`);
+    this.disconnect();
   }
 
   private async onAudioPlayerIdle(_oldState: AudioPlayerState, newState: AudioPlayerState): Promise<void> {

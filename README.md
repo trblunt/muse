@@ -82,7 +82,60 @@ services:
       # - YT_DLP_COOKIES_PATH=/run/secrets/youtube-cookies.txt
 ```
 
-If you keep the same `DISCORD_TOKEN`, reuse the same `/data` volume, and point your Compose service at a newer image tag, Muse will come back up with the same bot identity and persisted database/cache.
+#### Voice Commands In Docker
+
+This checkout's Docker image always includes the Python wake-word and Whisper sidecar dependencies so you can turn voice commands on without maintaining a separate image variant.
+
+The default build now uses a CUDA 12.4 torch wheel for Whisper:
+
+```bash
+docker build -t muse:voice .
+```
+
+That build also preloads the default `openWakeWord` assets and the configured Whisper model into the image, so the sidecar does not need a first-boot model download when you stick with the Docker defaults.
+
+When you run the container, give it GPU access:
+
+```bash
+docker run --gpus all -it -v "$(pwd)/data":/data -e DISCORD_TOKEN='' -e SPOTIFY_CLIENT_ID='' -e SPOTIFY_CLIENT_SECRET='' -e YOUTUBE_API_KEY='' muse:voice
+```
+
+If your Docker host cannot expose an NVIDIA GPU to the container, override the torch install back to CPU:
+
+```bash
+docker build -t muse:voice-cpu \
+  --build-arg VOICE_COMMANDS_TORCH_INSTALL="torch --index-url https://download.pytorch.org/whl/cpu" \
+  .
+```
+
+If you want to bake a different Whisper checkpoint into the image, override `VOICE_COMMANDS_WHISPER_MODEL` at build time too:
+
+```bash
+docker build -t muse:voice-small \
+  --build-arg VOICE_COMMANDS_WHISPER_MODEL=small.en \
+  .
+```
+
+Then enable the feature with environment variables such as:
+
+- `VOICE_COMMANDS_ENABLED=true`
+- `VOICE_COMMANDS_AUTOSTART_SIDECAR=true`
+- `VOICE_COMMANDS_WAKE_WORD=hey_jarvis`
+- `VOICE_COMMANDS_WHISPER_MODEL=base.en`
+
+If you want to keep Muse itself lighter, the cleaner Docker setup is to run the sidecar in a separate CUDA-enabled container and point Muse at it by setting:
+
+- `VOICE_COMMANDS_AUTOSTART_SIDECAR=false`
+- `VOICE_COMMANDS_SIDECAR_HOST=<sidecar-host>`
+- `VOICE_COMMANDS_SIDECAR_PORT=<sidecar-port>`
+
+The Dockerfile still accepts a `VOICE_COMMANDS_TORCH_INSTALL` build arg if you want to pin a different CUDA wheel. For example:
+
+```bash
+docker build -t muse:voice-gpu \
+  --build-arg VOICE_COMMANDS_TORCH_INSTALL="torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124" \
+  .
+```
 
 ### Node.js
 
@@ -172,4 +225,28 @@ You can configure the bot to automatically turn down the volume when people are 
 
 - `/config set-reduce-vol-when-voice true` - Enable automatic volume reduction
 - `/config set-reduce-vol-when-voice false` - Disable automatic volume reduction
-- `/config set-reduce-vol-when-voice-target <volume>` - Set the target volume percentage when people speak (0-100, default is 20)
+- `/config set-reduce-vol-when-voice-target <volume>` - Set the target volume percentage when people speak (0-100, default is 70)
+
+### Voice Commands
+
+Muse can now stream Discord receive audio to a small local Python sidecar over WebSockets for wake-word detection and Whisper transcription. The current implementation is designed around short commands such as `Jarvis, play darude sandstorm`, `Jarvis pause`, `Jarvis next`, `Jarvis resume`, `Jarvis clear`, and `Jarvis stop`.
+
+Set the following environment variables to enable it:
+
+- `VOICE_COMMANDS_ENABLED=true`
+- `VOICE_COMMANDS_AUTOSTART_SIDECAR=true`
+- `VOICE_COMMANDS_PYTHON_EXECUTABLE=python`
+- `VOICE_COMMANDS_SIDECAR_HOST=127.0.0.1`
+- `VOICE_COMMANDS_SIDECAR_PORT=8765`
+- `VOICE_COMMANDS_WAKE_WORD=hey_jarvis`
+- `VOICE_COMMANDS_WAKE_WORD_THRESHOLD=0.5`
+- `VOICE_COMMANDS_WHISPER_MODEL=base.en`
+
+Install the sidecar dependencies with:
+
+```bash
+python -m pip install -r voice-command-sidecar-requirements.txt
+```
+
+The Python sidecar lives at `src/scripts/voice-command-sidecar.py`. Muse owns the Discord receive connection, decodes and downsamples each speaker to 16 kHz mono, and streams frames to the sidecar. The sidecar only performs wake-word detection and Whisper transcription before sending the transcript back to Muse for command routing.
+

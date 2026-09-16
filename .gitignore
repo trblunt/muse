@@ -107,3 +107,6 @@ dist
 
 # TernJS port file
 .tern-port
+
+# Local wake-word and speech-model cache
+voice-data/

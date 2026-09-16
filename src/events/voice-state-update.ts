@@ -11,18 +11,36 @@ export default async (oldState: VoiceState, newState: VoiceState): Promise<void>
 
   const player = playerManager.get(oldState.guild.id);
 
-  if (!player.voiceConnection || player.voiceConnection.state.status !== VoiceConnectionStatus.Ready) {
-    return;
-  }
+  const logVoice = (message: string) => {
+    if (process.env.VOICE_COMMANDS_DEBUG !== 'true') {
+      return;
+    }
 
-  const {channelId} = player.voiceConnection.joinConfig;
-  if (!channelId || (oldState.channelId !== channelId && newState.channelId !== channelId)) {
-    return;
-  }
+    console.info(`[voice-debug] ${message}`);
+  };
 
-  const voiceChannel = newState.guild.channels.cache.get(channelId) as VoiceChannel | undefined;
-  const {leaveIfNoListeners} = await getGuildSettings(player.guildId);
-  if (!voiceChannel || (getSizeWithoutBots(voiceChannel) === 0 && leaveIfNoListeners)) {
-    player.disconnect();
+  if (player.voiceConnection) {
+    const voiceChannel: VoiceChannel = oldState.guild.channels.cache.get(player.voiceConnection.joinConfig.channelId!) as VoiceChannel;
+    const settings = await getGuildSettings(player.guildId);
+
+    const {leaveIfNoListeners, voiceCommandsEnabled} = settings;
+    const listenerCount = voiceChannel ? getSizeWithoutBots(voiceChannel) : 0;
+    const shouldKeepAliveForVoiceCommands = player.shouldStayConnectedForVoiceCommands(voiceCommandsEnabled);
+    logVoice(
+      `voiceStateUpdate guild=${player.guildId} oldChannel=${oldState.channelId ?? 'none'} ` +
+      `playerChannel=${voiceChannel?.id ?? 'none'} listeners=${listenerCount.toString()} ` +
+      `leaveIfNoListeners=${leaveIfNoListeners.toString()} voiceCommandsEnabled=${voiceCommandsEnabled.toString()} ` +
+      `keepAliveForVoiceCommands=${shouldKeepAliveForVoiceCommands.toString()} grace=${player.isInConnectGracePeriod().toString()}`,
+    );
+
+    if (player.isInConnectGracePeriod()) {
+      logVoice(`skipping auto-disconnect during connect grace period for guild=${player.guildId}`);
+      return;
+    }
+
+    if (!voiceChannel || (listenerCount === 0 && leaveIfNoListeners && !shouldKeepAliveForVoiceCommands)) {
+      logVoice(`auto-disconnecting due to voiceStateUpdate for guild=${player.guildId}`);
+      player.disconnect();
+    }
   }
 };

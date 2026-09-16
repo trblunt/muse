@@ -27,9 +27,18 @@ const CONFIG_MAP = {
   BOT_ACTIVITY_URL: process.env.BOT_ACTIVITY_URL ?? '',
   BOT_ACTIVITY: process.env.BOT_ACTIVITY ?? 'music',
   ENABLE_SPONSORBLOCK: process.env.ENABLE_SPONSORBLOCK === 'true',
-  SPONSORBLOCK_TIMEOUT: parseInt(process.env.SPONSORBLOCK_TIMEOUT ?? '5', 10),
-  YT_DLP_PATH: firstNonEmpty(process.env.YT_DLP_PATH, process.env.MUSE_BUNDLED_YT_DLP_PATH) ?? 'yt-dlp',
-  YT_DLP_AUTO_UPDATE: process.env.YT_DLP_AUTO_UPDATE === 'true',
+  SPONSORBLOCK_TIMEOUT: Number(process.env.SPONSORBLOCK_TIMEOUT ?? 5),
+  VOICE_COMMANDS_ENABLED: process.env.VOICE_COMMANDS_ENABLED === 'true',
+  VOICE_COMMANDS_ENABLED_AT_STARTUP: process.env.VOICE_COMMANDS_ENABLED_AT_STARTUP !== 'false',
+  VOICE_COMMANDS_AUTOSTART_SIDECAR: process.env.VOICE_COMMANDS_AUTOSTART_SIDECAR !== 'false',
+  VOICE_COMMANDS_PYTHON_EXECUTABLE: process.env.VOICE_COMMANDS_PYTHON_EXECUTABLE ?? 'python',
+  VOICE_COMMANDS_SIDECAR_HOST: process.env.VOICE_COMMANDS_SIDECAR_HOST ?? '127.0.0.1',
+  VOICE_COMMANDS_SIDECAR_PORT: Number(process.env.VOICE_COMMANDS_SIDECAR_PORT ?? 8765),
+  VOICE_COMMANDS_SIDECAR_SCRIPT: path.resolve(process.env.VOICE_COMMANDS_SIDECAR_SCRIPT ?? path.join(process.cwd(), 'src', 'scripts', 'voice-command-sidecar.py')),
+  VOICE_COMMANDS_WAKE_WORD: process.env.VOICE_COMMANDS_WAKE_WORD ?? 'hey_jarvis',
+  VOICE_COMMANDS_WAKE_WORD_THRESHOLD: Number(process.env.VOICE_COMMANDS_WAKE_WORD_THRESHOLD ?? 0.5),
+  VOICE_COMMANDS_WHISPER_MODEL: process.env.VOICE_COMMANDS_WHISPER_MODEL ?? 'base.en',
+  VOICE_COMMANDS_DEBUG: process.env.VOICE_COMMANDS_DEBUG === 'true',
 } as const;
 
 const BOT_ACTIVITY_TYPE_MAP = {
@@ -55,8 +64,17 @@ export default class Config {
   readonly BOT_ACTIVITY!: string;
   readonly ENABLE_SPONSORBLOCK!: boolean;
   readonly SPONSORBLOCK_TIMEOUT!: number;
-  readonly YT_DLP_PATH!: string;
-  readonly YT_DLP_AUTO_UPDATE!: boolean;
+  readonly VOICE_COMMANDS_ENABLED!: boolean;
+  readonly VOICE_COMMANDS_ENABLED_AT_STARTUP!: boolean;
+  readonly VOICE_COMMANDS_AUTOSTART_SIDECAR!: boolean;
+  readonly VOICE_COMMANDS_PYTHON_EXECUTABLE!: string;
+  readonly VOICE_COMMANDS_SIDECAR_HOST!: string;
+  readonly VOICE_COMMANDS_SIDECAR_PORT!: number;
+  readonly VOICE_COMMANDS_SIDECAR_SCRIPT!: string;
+  readonly VOICE_COMMANDS_WAKE_WORD!: string;
+  readonly VOICE_COMMANDS_WAKE_WORD_THRESHOLD!: number;
+  readonly VOICE_COMMANDS_WHISPER_MODEL!: string;
+  readonly VOICE_COMMANDS_DEBUG!: boolean;
 
   constructor() {
     for (const [key, value] of Object.entries(CONFIG_MAP)) {
