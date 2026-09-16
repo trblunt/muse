@@ -117,17 +117,6 @@ export default class {
   private readonly voiceCommandBridge?: VoiceCommandBridge;
   private disconnectTimer: NodeJS.Timeout | null = null;
   private lastConnectStartedAt = 0;
-  private readonly networkingStateChangeHandler = (_oldNetworkState: unknown, newNetworkState: unknown) => {
-    if (!newNetworkState || typeof newNetworkState !== 'object') {
-      return;
-    }
-
-    /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call */
-    const newUdp = Reflect.get(newNetworkState, 'udp');
-    clearInterval(newUdp?.keepAliveInterval);
-    /* eslint-enable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call */
-  };
-
   private readonly channelToSpeakingUsers: Map<string, Set<string>> = new Map();
   private volumeBeforeVoiceActivity?: number;
   private voiceActivityVolumeTarget?: number;
@@ -153,6 +142,10 @@ export default class {
     this.logVoice(`player.connect guild=${this.guildId} targetChannel=${channel.id} (${channel.name})`);
     this.voiceCommandBridge?.detach(this.guildId);
 
+    if (this.voiceConnection) {
+      this.disconnect();
+    }
+
     // Always get freshest default volume setting value
     const settings = await getGuildSettings(this.guildId);
     const {defaultVolume = DEFAULT_VOLUME} = settings;
@@ -167,11 +160,15 @@ export default class {
       adapterCreator: channel.guild.voiceAdapterCreator as DiscordGatewayAdapterCreator,
     });
 
-    this.voiceConnection.on('debug', message => {
+    this.voiceConnection = voiceConnection;
+    this.currentChannel = channel;
+    this.hasRegisteredVoiceActivityListener = false;
+
+    voiceConnection.on('debug', message => {
       this.logVoice(`voiceConnection debug guild=${this.guildId} ${message}`);
     });
 
-    this.voiceConnection.on('error', error => {
+    voiceConnection.on('error', error => {
       this.logVoice(`voiceConnection error guild=${this.guildId} ${(error as Error).message}`);
     });
 
@@ -183,34 +180,35 @@ export default class {
         stateTransitions.shift();
       }
 
-    // Workaround to disable keepAlive
-    this.voiceConnection.on('stateChange', (oldState, newState) => {
       this.logVoice(`voiceConnection state guild=${this.guildId} ${oldState.status} -> ${newState.status}`);
-      /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call */
-      const oldNetworking = Reflect.get(oldState, 'networking');
-      const newNetworking = Reflect.get(newState, 'networking');
 
-      oldNetworking?.off('stateChange', this.networkingStateChangeHandler);
-      newNetworking?.off('stateChange', this.networkingStateChangeHandler);
-      newNetworking?.on('stateChange', this.networkingStateChangeHandler);
-      /* eslint-enable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call */
-
-      this.currentChannel = channel;
+      if (this.voiceConnection === voiceConnection
+        && newState.status === VoiceConnectionStatus.Ready
+        && !this.hasRegisteredVoiceActivityListener) {
+        this.registerVoiceActivityListener(guildSettings);
+        this.hasRegisteredVoiceActivityListener = true;
+        this.refreshVoiceCommandListening(guildSettings.voiceCommandsEnabled);
+      }
     });
 
+    voiceConnection.on(
+      VoiceConnectionStatus.Disconnected,
+      this.onVoiceConnectionDisconnect.bind(this, voiceConnection),
+    );
+
     try {
-      await entersState(this.voiceConnection, VoiceConnectionStatus.Ready, 20_000);
-      this.currentChannel = channel;
+      await this.waitForVoiceConnectionReady(voiceConnection);
       this.logVoice(`voiceConnection ready guild=${this.guildId} channel=${channel.id} (${channel.name})`);
-      this.registerVoiceActivityListener(guildSettings);
-      this.refreshVoiceCommandListening(guildSettings.voiceCommandsEnabled);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.logVoice(`voiceConnection failed to become ready guild=${this.guildId} channel=${channel.id} (${channel.name}) error=${message}`);
-      this.voiceConnection.destroy();
-      this.voiceConnection = null;
-      this.currentChannel = undefined;
-      throw new Error('voice connection did not become ready');
+      const {status} = voiceConnection.state;
+      destroyVoiceConnection(voiceConnection);
+
+      if (this.voiceConnection === voiceConnection) {
+        this.voiceConnection = null;
+        this.currentChannel = undefined;
+      }
+
+      throw new Error(`Failed to connect to the voice channel (last state: ${status}, rejoin attempts: ${voiceConnection.rejoinAttempts}, recent states: ${stateTransitions.join(' -> ')}).`);
     }
   }
 
@@ -225,14 +223,18 @@ export default class {
       }
 
       this.loopCurrentSong = false;
-      this.voiceConnection.destroy();
-      this.audioPlayer?.stop(true);
+      destroyVoiceConnection(this.voiceConnection);
+      this.stopAudioPlayer(true);
       this.voiceCommandBridge?.detach(this.guildId);
 
       this.voiceConnection = null;
       this.audioPlayer = null;
       this.audioResource = null;
       this.currentChannel = undefined;
+      this.channelToSpeakingUsers.clear();
+      this.volumeBeforeVoiceActivity = undefined;
+      this.voiceActivityVolumeTarget = undefined;
+      this.hasRegisteredVoiceActivityListener = false;
     }
   }
 
@@ -940,9 +942,31 @@ export default class {
     }
   }
 
-  private onVoiceConnectionDisconnect(): void {
+  private async onVoiceConnectionDisconnect(voiceConnection: VoiceConnection): Promise<void> {
     this.logVoice(`voiceConnection disconnected event guild=${this.guildId}`);
-    this.disconnect();
+    await recoverVoiceConnection(voiceConnection, {
+      isCurrent: candidate => this.voiceConnection === candidate,
+      dispose: candidate => {
+        if (this.voiceConnection === candidate) {
+          this.disconnect();
+        } else {
+          destroyVoiceConnection(candidate);
+        }
+      },
+    });
+  }
+
+  private async ensureVoiceConnectionReady(): Promise<VoiceConnection> {
+    if (this.voiceConnection === null) {
+      throw new Error('Not connected to a voice channel.');
+    }
+
+    await this.waitForVoiceConnectionReady(this.voiceConnection);
+    return this.voiceConnection;
+  }
+
+  private async waitForVoiceConnectionReady(voiceConnection: VoiceConnection): Promise<void> {
+    await entersState(voiceConnection, VoiceConnectionStatus.Ready, 60_000);
   }
 
   private async onAudioPlayerIdle(_oldState: AudioPlayerState, newState: AudioPlayerState): Promise<void> {
