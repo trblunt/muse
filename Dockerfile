@@ -13,9 +13,14 @@ RUN apt-get update \
     openssl \
     ca-certificates \
     python3 \
-    python3-pip \
     python3-venv \
-    python-is-python3 \
+    && python3 -m venv /opt/yt-dlp \
+    && if [ -n "${YT_DLP_VERSION}" ]; then \
+        /opt/yt-dlp/bin/pip install --no-cache-dir "yt-dlp[default]==${YT_DLP_VERSION}"; \
+    else \
+        /opt/yt-dlp/bin/pip install --no-cache-dir "yt-dlp[default]"; \
+    fi \
+    && ln -s /opt/yt-dlp/bin/yt-dlp /usr/local/bin/yt-dlp \
     && apt-get autoclean \
     && apt-get autoremove \
     && rm -rf /var/lib/apt/lists/*
@@ -63,7 +68,7 @@ ENV VOICE_COMMANDS_WHISPER_MODEL=$VOICE_COMMANDS_WHISPER_MODEL
 
 COPY voice-command-sidecar-requirements.txt ./
 
-RUN python -m venv /usr/app/.venv && \
+RUN python3 -m venv /usr/app/.venv && \
     /usr/app/.venv/bin/pip install --no-cache-dir --upgrade pip && \
     if [ -n "$VOICE_COMMANDS_TORCH_INSTALL" ]; then /usr/app/.venv/bin/pip install --no-cache-dir $VOICE_COMMANDS_TORCH_INSTALL; fi && \
     /usr/app/.venv/bin/pip install --no-cache-dir -r voice-command-sidecar-requirements.txt && \
