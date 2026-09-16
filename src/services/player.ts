@@ -176,10 +176,6 @@ export default class {
     this.currentChannel = channel;
     this.hasRegisteredVoiceActivityListener = false;
 
-    voiceConnection.on('debug', message => {
-      this.logVoice(`voiceConnection debug guild=${this.guildId} ${message}`);
-    });
-
     voiceConnection.on('error', error => {
       this.logVoice(`voiceConnection error guild=${this.guildId} ${(error as Error).message}`);
     });
