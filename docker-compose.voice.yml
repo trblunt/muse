@@ -1,0 +1,14 @@
+services:
+  muse:
+    build:
+      context: .
+    image: muse-voice-local
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    gpus: all
+    volumes:
+      - ./voice-data:/data
