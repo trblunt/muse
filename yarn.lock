@@ -135,9 +135,9 @@
     tslib "^2.6.2"
     ws "^8.17.0"
 
-"@distube/ytdl-core@https://codeload.github.com/ToddyTheNoobDud/ytdl-core-stuff/tar.gz/refs/heads/master":
+"@distube/ytdl-core@https://codeload.github.com/ToddyTheNoobDud/ytdl-core-stuff/tar.gz/5c779c07ba6a0636bcc894c0ba1d09ceec7028bb":
   version "4.16.12"
-  resolved "https://codeload.github.com/ToddyTheNoobDud/ytdl-core-stuff/tar.gz/refs/heads/master#93903e631de289ae6fbf8e1c8e3969c0eb4f560f"
+  resolved "https://codeload.github.com/ToddyTheNoobDud/ytdl-core-stuff/tar.gz/5c779c07ba6a0636bcc894c0ba1d09ceec7028bb#5c779c07ba6a0636bcc894c0ba1d09ceec7028bb"
   dependencies:
     astring "^1.9.0"
     http-cookie-agent "^7.0.2"

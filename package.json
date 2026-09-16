@@ -90,7 +90,7 @@
     "@discordjs/opus": "^0.10.0",
     "@discordjs/rest": "2.6.1",
     "@discordjs/voice": "0.19.2",
-    "@distube/ytdl-core": "https://codeload.github.com/ToddyTheNoobDud/ytdl-core-stuff/tar.gz/refs/heads/master",
+    "@distube/ytdl-core": "https://codeload.github.com/ToddyTheNoobDud/ytdl-core-stuff/tar.gz/5c779c07ba6a0636bcc894c0ba1d09ceec7028bb",
     "@distube/ytsr": "^2.0.4",
     "@prisma/client": "4.16.0",
     "@types/libsodium-wrappers": "^0.7.9",
